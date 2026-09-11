@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -115,14 +116,17 @@ def _request_json(request: urllib.request.Request) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read().decode("utf-8")
+            if response.status == 204:
+                return {}
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         try:
-            detail = json.loads(body).get("error", body)
+            error = json.loads(body)
+            detail = error.get("error", "Request failed") if isinstance(error, dict) else "Request failed"
             if isinstance(detail, dict):
-                detail = detail.get("message") or detail.get("status") or detail
+                detail = detail.get("message") or detail.get("status") or "Request failed"
         except json.JSONDecodeError:
-            detail = body or exc.reason
+            detail = exc.reason
         raise TasksClientError(f"Google returned HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise TasksClientError(f"Could not contact Google: {exc.reason}") from exc
@@ -281,27 +285,47 @@ def _access_token() -> str:
 
 
 def _api_get(path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    return _api_request("GET", path, params=params)
+
+
+def _api_request(
+    method: str, path: str, fields: dict[str, Any] | None = None,
+    params: dict[str, str] | None = None, etag: str | None = None,
+) -> dict[str, Any]:
+    """Issue one request. Never retry a write whose outcome may be ambiguous."""
     query = "?" + urllib.parse.urlencode(params) if params else ""
+    headers = {"Authorization": f"Bearer {_access_token()}", "Accept": "application/json"}
+    data = None
+    if fields is not None:
+        data = json.dumps(fields).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if etag is not None:
+        headers["If-Match"] = etag
     request = urllib.request.Request(
         TASKS_API + path + query,
-        headers={"Authorization": f"Bearer {_access_token()}"},
+        headers=headers, data=data, method=method,
     )
     return _request_json(request)
 
 
 def _pages(path: str, item_key: str, params: dict[str, str]) -> Iterable[dict[str, Any]]:
     page_token: str | None = None
+    seen_tokens: set[str] = set()
     while True:
         page_params = dict(params)
         if page_token:
             page_params["pageToken"] = page_token
         page = _api_get(path, page_params)
-        for item in page.get(item_key, []):
-            if isinstance(item, dict):
-                yield item
+        items = page.get(item_key, [])
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise TasksClientError("Google returned a malformed collection; refusing an incomplete read")
+        yield from items
         next_token = page.get("nextPageToken")
-        if not isinstance(next_token, str) or not next_token:
+        if next_token is None or next_token == "":
             break
+        if not isinstance(next_token, str) or next_token in seen_tokens:
+            raise TasksClientError("Google returned invalid pagination; refusing an incomplete read")
+        seen_tokens.add(next_token)
         page_token = next_token
 
 
@@ -321,14 +345,15 @@ def tasks_for_list(task_list_id: str, include_completed: bool = True) -> list[di
     return list(_pages(f"/lists/{encoded_id}/tasks", "items", params))
 
 
-def snapshot(include_completed: bool) -> dict[str, Any]:
+def snapshot(include_completed: bool = True) -> dict[str, Any]:
     lists = []
     for task_list in task_lists():
         task_list_id = task_list.get("id")
         if not isinstance(task_list_id, str):
-            continue
+            raise TasksClientError("Google returned a list without an ID; snapshot would be incomplete")
         lists.append(
             {
+                **task_list,
                 "id": task_list_id,
                 "title": task_list.get("title", "Untitled list"),
                 "updated": task_list.get("updated"),
@@ -336,6 +361,192 @@ def snapshot(include_completed: bool) -> dict[str, Any]:
             }
         )
     return {"task_lists": lists}
+
+
+def _id(value: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise TasksClientError("A nonempty list or task ID is required")
+    return urllib.parse.quote(value, safe="")
+
+
+def _task_path(list_id: str, task_id: str | None = None) -> str:
+    path = f"/lists/{_id(list_id)}/tasks"
+    return path + "/" + _id(task_id) if task_id is not None else path
+
+
+def _list_path(list_id: str) -> str:
+    return "/users/@me/lists/" + _id(list_id)
+
+
+def get_task(list_id: str, task_id: str) -> dict[str, Any]:
+    return _api_get(_task_path(list_id, task_id))
+
+
+def get_task_list(list_id: str) -> dict[str, Any]:
+    return _api_get(_list_path(list_id))
+
+
+def _title(title: str, limit: int) -> str:
+    if not isinstance(title, str) or not title.strip() or len(title) > limit:
+        raise TasksClientError(f"Title must contain 1–{limit} characters")
+    return title
+
+
+def _task_fields(fields: dict[str, Any], *, creating: bool = False) -> dict[str, Any]:
+    allowed = {"title", "notes", "status", "due", "completed"}
+    if not isinstance(fields, dict) or not fields:
+        raise TasksClientError("Provide a nonempty task field object")
+    unknown = set(fields) - allowed
+    if unknown:
+        raise TasksClientError("Unsupported task fields: " + ", ".join(sorted(unknown)))
+    if creating or "title" in fields:
+        _title(fields.get("title"), 1024)
+    if "notes" in fields and fields["notes"] is not None:
+        if not isinstance(fields["notes"], str) or len(fields["notes"]) > 8192:
+            raise TasksClientError("Notes must be text of at most 8192 characters, or null")
+    if "status" in fields and fields["status"] not in ("needsAction", "completed"):
+        raise TasksClientError("Status must be needsAction or completed")
+    for key in ("due", "completed"):
+        value = fields.get(key)
+        if value is not None:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None or "T" not in value:
+                    raise ValueError
+            except (AttributeError, TypeError, ValueError):
+                raise TasksClientError(f"{key} must be an RFC 3339 timestamp or null") from None
+    return dict(fields)
+
+
+def _position_params(parent: str | None, previous: str | None) -> dict[str, str]:
+    params = {}
+    for key, value in (("parent", parent), ("previous", previous)):
+        if value is not None:
+            _id(value)
+            params[key] = value
+    return params
+
+
+def create_task_list(title: str) -> dict[str, Any]:
+    return _api_request("POST", "/users/@me/lists", {"title": _title(title, 1024)})
+
+
+def rename_task_list(list_id: str, title: str, etag: str | None = None) -> dict[str, Any]:
+    return _api_request("PATCH", _list_path(list_id), {"title": _title(title, 1024)}, etag=etag)
+
+
+def create_task(
+    list_id: str, fields: dict[str, Any], parent: str | None = None,
+    previous: str | None = None,
+) -> dict[str, Any]:
+    return _api_request("POST", _task_path(list_id), _task_fields(fields, creating=True),
+                        params=_position_params(parent, previous))
+
+
+def update_task(
+    list_id: str, task_id: str, fields: dict[str, Any], etag: str | None = None,
+) -> dict[str, Any]:
+    """Patch only explicitly supplied mutable fields; null clears an optional field."""
+    return _api_request("PATCH", _task_path(list_id, task_id), _task_fields(fields), etag=etag)
+
+
+def move_task(
+    source_list: str, task_id: str, destination_list: str | None = None,
+    parent: str | None = None, previous: str | None = None,
+) -> dict[str, Any]:
+    """Move the original task natively, never copy/delete it.
+
+    Omitted parent/previous means top-level/first position, even within one list.
+    Google rejects recurrent cross-list moves, nesting assigned/repeating tasks,
+    and positioning completed+hidden tasks anywhere but top-level first position.
+    """
+    params = _position_params(parent, previous)
+    if destination_list is not None:
+        _id(destination_list)
+        params["destinationTasklist"] = destination_list
+    return _api_request("POST", _task_path(source_list, task_id) + "/move", params=params)
+
+
+def delete_task(list_id: str, task_id: str, etag: str | None = None) -> dict[str, Any]:
+    """Explicit deletion; assigned task deletion also affects its Docs/Chat source."""
+    return _api_request("DELETE", _task_path(list_id, task_id), etag=etag)
+
+
+def delete_empty_task_list(list_id: str, etag: str | None = None) -> dict[str, Any]:
+    """Refuse deletion if any undeleted task, including archived tasks, remains.
+
+    The API has no atomic delete-if-empty operation. Call only while other writers
+    are paused; a task could otherwise arrive between this check and deletion.
+    """
+    if tasks_for_list(list_id, include_completed=True):
+        raise TasksClientError("Refusing to delete a list that still contains tasks")
+    return _api_request("DELETE", _list_path(list_id), etag=etag)
+
+
+def save_snapshot(path: Path, include_completed: bool = True) -> dict[str, Any]:
+    """Save task content inside the private app directory, never alongside code."""
+    path = path.expanduser().resolve()
+    if not path.is_relative_to(APP_DIR.resolve()):
+        raise TasksClientError(f"Task snapshots must be stored inside {APP_DIR}")
+    if path in (CREDENTIALS_PATH.resolve(), TOKEN_PATH.resolve()):
+        raise TasksClientError("Snapshot output cannot overwrite authorization files")
+    if path.exists():
+        raise TasksClientError("Snapshot output already exists; choose a new filename")
+    value = snapshot(include_completed)
+    _write_private_json(path, value)
+    return value
+
+
+def _execute_cli_write(args: argparse.Namespace) -> None:
+    fields = {key: getattr(args, key) for key in ("title", "notes", "status", "due", "completed")
+              if getattr(args, key, None) is not None}
+    for key in ("notes", "due", "completed"):
+        if getattr(args, "clear_" + key, False):
+            if key in fields:
+                raise TasksClientError(f"Cannot both set and clear {key}")
+            fields[key] = None
+    command = args.command
+    if command in ("create-task", "update-task"):
+        _task_fields(fields, creating=command == "create-task")
+    elif command in ("create-list", "rename-list"):
+        _title(args.title, 1024)
+    preview = {key: value for key, value in vars(args).items() if key != "apply"}
+    if not args.apply:
+        print(json.dumps({"dry_run": True, "operation": preview}, indent=2))
+        return
+    # Persist the full before-image before sending the first mutation. Neither
+    # authorization headers nor OAuth material are included in these records.
+    audit_path = APP_DIR / "audit" / (str(time.time_ns()) + "-" + secrets.token_hex(4) + ".json")
+    audit = {"operation": preview, "before": snapshot(), "state": "prepared"}
+    _write_private_json(audit_path, audit)
+    try:
+        if command == "create-list":
+            result = create_task_list(args.title)
+        elif command == "rename-list":
+            result = rename_task_list(args.list_id, args.title, args.etag)
+        elif command == "create-task":
+            result = create_task(args.list_id, fields, args.parent, args.previous)
+        elif command == "update-task":
+            result = update_task(args.list_id, args.task_id, fields, args.etag)
+        elif command == "move-task":
+            result = move_task(args.list_id, args.task_id, args.destination_list, args.parent, args.previous)
+        elif command == "delete-task":
+            result = delete_task(args.list_id, args.task_id, args.etag)
+        elif command == "delete-empty-list":
+            result = delete_empty_task_list(args.list_id, args.etag)
+        else:
+            raise TasksClientError("Unknown write operation")
+        audit.update(result=result, state="applied")
+        _write_private_json(audit_path, audit)
+        audit["after"] = snapshot()
+        audit["state"] = "verified_snapshot"
+        _write_private_json(audit_path, audit)
+    except Exception:
+        # An interrupted/failed request may already have reached Google. Leave
+        # the before-image and last known state; require inspection before retry.
+        print(f"Operation did not finish cleanly; inspect Google and audit {audit_path} before retrying.", file=sys.stderr)
+        raise
+    print(json.dumps({"result": result, "audit": str(audit_path)}, indent=2))
 
 
 def print_probe(sample_size: int) -> None:
@@ -381,6 +592,31 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument(
         "--open-only", action="store_true", help="Omit completed and hidden tasks"
     )
+    export.add_argument("--output", type=Path, help="Save privately inside PERSONAL_TASKS_APP_DIR")
+    for name in ("create-list", "rename-list", "create-task", "update-task", "move-task", "delete-task", "delete-empty-list"):
+        write = subparsers.add_parser(name, help=f"Preview {name}; use --apply to execute")
+        write.add_argument("--apply", action="store_true", help="Execute this write and save private before/after audit")
+        if name != "create-list":
+            write.add_argument("list_id")
+        if name in ("update-task", "move-task", "delete-task"):
+            write.add_argument("task_id")
+        if name in ("rename-list", "update-task", "delete-task", "delete-empty-list"):
+            write.add_argument("--etag", help="If-Match precondition from the latest read")
+        if name in ("create-list", "rename-list", "create-task", "update-task"):
+            write.add_argument("--title", required=name != "update-task")
+        if name in ("create-task", "update-task"):
+            write.add_argument("--notes")
+            write.add_argument("--status", choices=("needsAction", "completed"))
+            write.add_argument("--due", help="RFC 3339 date; Google stores only its date, not time")
+            write.add_argument("--completed", help="RFC 3339 completion timestamp")
+        if name == "update-task":
+            for field in ("notes", "due", "completed"):
+                write.add_argument("--clear-" + field, action="store_true")
+        if name in ("create-task", "move-task"):
+            write.add_argument("--parent", help="Parent task ID; omitted means top-level")
+            write.add_argument("--previous", help="Previous sibling ID; omitted means first position")
+        if name == "move-task":
+            write.add_argument("--destination-list", help="Target list ID; omitted means current list")
     return parser
 
 
@@ -392,10 +628,16 @@ def main() -> int:
         elif args.command == "probe":
             print_probe(max(0, args.sample))
         elif args.command == "snapshot":
-            json.dump(snapshot(include_completed=not args.open_only), sys.stdout, indent=2)
-            print()
+            if args.output:
+                save_snapshot(args.output, include_completed=not args.open_only)
+                print(f"Saved private snapshot: {args.output}")
+            else:
+                json.dump(snapshot(include_completed=not args.open_only), sys.stdout, indent=2)
+                print()
+        else:
+            _execute_cli_write(args)
         return 0
-    except TasksClientError as exc:
+    except (TasksClientError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
