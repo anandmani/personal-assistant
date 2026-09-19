@@ -3,6 +3,12 @@
 This is a small, local Google Tasks client. It accesses the same Google Tasks
 data that TasksBoard displays while avoiding repeated screen-reading.
 
+Project information and the privacy policy are published from `docs/` using
+GitHub Pages:
+
+- Homepage: https://anandmani.github.io/personal-assistant/
+- Privacy policy: https://anandmani.github.io/personal-assistant/privacy.html
+
 The **Google Tasks API** must be enabled in the same Google Cloud project as the
 OAuth client. If the OAuth audience is External and the app remains in Testing,
 Google may expire the refresh grant after seven days; rerun `auth` if that happens.

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Personal Tasks Assistant is a private, local-first tool for managing the owner's Google Tasks.">
+    <title>Personal Tasks Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <a class="brand" href="./" aria-label="Personal Tasks Assistant home">
+          <span class="brand-mark" aria-hidden="true">✓</span>
+          <span>Personal Tasks Assistant</span>
+        </a>
+        <nav aria-label="Primary navigation">
+          <a href="privacy.html">Privacy</a>
+          <a href="https://github.com/anandmani/personal-assistant">Source</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero">
+          <p class="eyebrow">Personal · Local-first · Open source</p>
+          <h1>Tasks, without the busywork.</h1>
+          <p class="lede">
+            Personal Tasks Assistant is a single-user utility that helps its
+            owner read, create, update, complete, and organize Google Tasks
+            through the Google Tasks API. It runs locally on the owner's Mac
+            and is not offered as a hosted service.
+          </p>
+          <div class="actions">
+            <a class="button" href="privacy.html">Read the privacy policy</a>
+            <a class="button secondary" href="https://github.com/anandmani/personal-assistant">View the source code</a>
+          </div>
+        </section>
+
+        <section class="grid" aria-label="How the application works">
+          <article class="card">
+            <h2>Direct Google access</h2>
+            <p>The client requests Google Tasks access only after the owner signs in and grants consent.</p>
+          </article>
+          <article class="card">
+            <h2>Local credentials</h2>
+            <p>OAuth credentials and saved authorization are kept in owner-only files on the local Mac.</p>
+          </article>
+          <article class="card">
+            <h2>Audited changes</h2>
+            <p>Writes are previewed and recorded locally so task changes can be checked after execution.</p>
+          </article>
+        </section>
+      </main>
+
+      <footer>
+        <span>Personal Tasks Assistant</span> ·
+        <a href="privacy.html">Privacy policy</a> ·
+        <a href="https://github.com/anandmani/personal-assistant/issues">Contact</a>
+      </footer>
+    </div>
+  </body>
+</html>
