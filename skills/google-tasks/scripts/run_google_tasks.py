@@ -15,7 +15,7 @@ os.environ.setdefault("PERSONAL_TASKS_APP_DIR", str(PRIVATE_DIR))
 
 for parent in SKILL_SCRIPT.parents:
     client = parent / "google_tasks.py"
-    if client.is_file() and client.resolve() != SKILL_SCRIPT:
+    if client.is_file():
         runpy.run_path(str(client), run_name="__main__")
         break
 else:

@@ -5,7 +5,8 @@ description: Manage the user's saved Google Tasks and TasksBoard cards through t
 
 # Google Tasks
 
-Use `scripts/google_tasks.py` as the entrypoint. It uses the Google Tasks API,
+Use `scripts/run_google_tasks.py` as the entrypoint. It launches the repository's
+full `google_tasks.py` client, which uses the Google Tasks API,
 which is the source displayed by TasksBoard, and avoids computer-use unless the
 API cannot expose information the user specifically needs.
 
@@ -24,7 +25,7 @@ tokens to a skill. `PERSONAL_TASKS_APP_DIR` may override this directory.
 If authorization is absent or Google returns `invalid_grant`, run:
 
 ```sh
-python3 scripts/google_tasks.py auth
+python3 scripts/run_google_tasks.py auth
 ```
 
 The user must complete Google's browser consent. Do not claim API access until
@@ -35,7 +36,7 @@ The user must complete Google's browser consent. Do not claim API access until
 For a compact connection check, run:
 
 ```sh
-python3 scripts/google_tasks.py probe --sample 0
+python3 scripts/run_google_tasks.py probe --sample 0
 ```
 
 Use `snapshot --open-only` for ordinary open-task requests. Use a full snapshot
