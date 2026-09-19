@@ -25,7 +25,7 @@ from typing import Any, Iterable
 APP_DIR = Path(
     os.environ.get(
         "PERSONAL_TASKS_APP_DIR",
-        str(Path(__file__).resolve().parent / ".private" / "google-tasks"),
+        str(Path.home() / ".config" / "personal-assistant" / "google-tasks"),
     )
 ).expanduser()
 CREDENTIALS_PATH = APP_DIR / "credentials.json"

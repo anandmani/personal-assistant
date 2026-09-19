@@ -1,0 +1,4 @@
+interface:
+  display_name: "Google Tasks"
+  short_description: "Manage Google Tasks safely through the API"
+  default_prompt: "Use $google-tasks to show my open tasks."

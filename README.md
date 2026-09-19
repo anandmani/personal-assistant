@@ -7,10 +7,10 @@ The **Google Tasks API** must be enabled in the same Google Cloud project as the
 OAuth client. If the OAuth audience is External and the app remains in Testing,
 Google may expire the refresh grant after seven days; rerun `auth` if that happens.
 
-Private files live in an owner-only, source-control-ignored folder:
+Private files live in an owner-only user configuration folder, outside Git:
 
-- OAuth desktop client: `.private/google-tasks/credentials.json`
-- Saved authorization: `.private/google-tasks/token.json`
+- OAuth desktop client: `~/.config/personal-assistant/google-tasks/credentials.json`
+- Saved authorization: `~/.config/personal-assistant/google-tasks/token.json`
 
 Set `PERSONAL_TASKS_APP_DIR` to use a different private storage directory.
 
@@ -49,7 +49,8 @@ concurrency precondition for updates and deletions. Moving a task without
 among its siblings. Inspect `--help` for each command.
 
 An applied CLI write saves private before/after snapshots under
-`.private/google-tasks/audit/`. Audit records contain task data, never credentials.
+`~/.config/personal-assistant/google-tasks/audit/`. Audit records contain task
+data, never credentials.
 Do not commit them. A failed or interrupted write may have reached Google;
 inspect its audit and live state before retrying. Deleting an assigned task also
 affects the original task in Google Docs or Chat.
@@ -57,8 +58,15 @@ affects the original task in Google Docs or Chat.
 Save a full snapshot, including completed/hidden/assigned tasks, privately:
 
 ```sh
-python3 google_tasks.py snapshot --output .private/google-tasks/backups/snapshot.json
+python3 google_tasks.py snapshot --output ~/.config/personal-assistant/google-tasks/backups/snapshot.json
 ```
+
+## Local skill
+
+The reusable skill source is in `skills/google-tasks`. Install that folder in a
+personal skills directory (a symlink is sufficient) to make the API workflow
+available from other local Codex and ChatGPT desktop sessions. The skill uses
+the same centralized OAuth directory above; no secrets are stored in the skill.
 
 ## Reorganization
 
